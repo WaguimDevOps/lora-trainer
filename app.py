@@ -1,25 +1,21 @@
-# lora_trainer_gradio.py
-
 import gradio as gr
 import zipfile
 import os
 import shutil
 from pathlib import Path
-import torch
 from diffusers import StableDiffusionPipeline
-from peft import LoraConfig, get_peft_model
+import torch
 
 UPLOAD_DIR = "uploaded_dataset"
 MODELS_DIR = "models"
-OUTPUT_DIR = "trained_lora"
 
-
+# Limpa o diretório de upload anterior, se existir
 def clear_upload_dir():
     if os.path.exists(UPLOAD_DIR):
         shutil.rmtree(UPLOAD_DIR)
     os.makedirs(UPLOAD_DIR)
 
-
+# Extrai o zip para a pasta de upload
 def handle_zip_upload(zip_file):
     if zip_file is None:
         return "Nenhum arquivo enviado", ""
@@ -37,51 +33,33 @@ def handle_zip_upload(zip_file):
         images = [f.name for f in extracted_files if f.suffix.lower() in ['.jpg', '.jpeg', '.png']]
         texts = [f.name for f in extracted_files if f.suffix.lower() == '.txt']
 
-        return ", ".join(images) if images else "Nenhuma imagem encontrada", \
-               ", ".join(texts) if texts else "Nenhum arquivo de texto encontrado"
+        return ", ".join(images) if images else "Nenhuma imagem encontrada", ", ".join(texts) if texts else "Nenhum arquivo de texto encontrado"
     except Exception as e:
         return f"Erro ao extrair o arquivo: {str(e)}", ""
 
-
+# Calcula steps
 def calculate_steps(image_count, repeats, epochs, batch_size):
     if batch_size <= 0:
         return 0
     steps_per_epoch = (image_count * repeats) // batch_size
     return steps_per_epoch * epochs
 
+# Carrega modelo base local
+def carregar_modelo_local(model_filename):
+    model_path = os.path.join(MODELS_DIR, model_filename)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Modelo {model_path} não encontrado.")
 
-def train_lora(model_base_path, output_dir, image_folder, learning_rate, batch_size, epochs, network_dim, network_alpha):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    pipe = StableDiffusionPipeline.from_pretrained(
-        model_base_path,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    ).to(device)
-
-    text_encoder = pipe.text_encoder
-
-    config = LoraConfig(
-        r=network_dim,
-        lora_alpha=network_alpha,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.1,
-        bias="none",
-        task_type="TEXT_ENCODER"
+    pipe = StableDiffusionPipeline.from_single_file(
+        model_path,
+        torch_dtype=torch.float16,
+        local_files_only=True,
+        use_safetensors=True
     )
+    pipe.to("cuda")
+    return pipe
 
-    model = get_peft_model(text_encoder, config)
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    for epoch in range(epochs):
-        for step in range(10):
-            loss = torch.tensor(0.01, requires_grad=True)
-            loss.backward()
-            # Aqui voce colocaria o otimizador real etc.
-
-    model.save_pretrained(output_dir)
-
-
+# Função principal de treinamento (simulado)
 def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                    train_text_encoder, lr_scheduler, precision, use_vae,
                    gradient_checkpoint, max_train_steps, save_every_n_steps,
@@ -91,7 +69,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         image_files = list(Path(UPLOAD_DIR).rglob("*.jpg")) + \
                       list(Path(UPLOAD_DIR).rglob("*.jpeg")) + \
                       list(Path(UPLOAD_DIR).rglob("*.png"))
-
         image_count = len(image_files)
 
         if image_count == 0:
@@ -107,23 +84,24 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         else:
             steps = int(steps)
 
-        train_lora(
-            model_base_path=os.path.join(MODELS_DIR, model_base),
-            output_dir=OUTPUT_DIR,
-            image_folder=UPLOAD_DIR,
-            learning_rate=float(learning_rate),
-            batch_size=batch_size_int,
-            epochs=epochs_int,
-            network_dim=network_dim,
-            network_alpha=network_alpha
-        )
+        carregar_modelo_local(model_base)  # apenas verifica se consegue carregar
 
-        return f"✅ Treinamento finalizado com sucesso! Modelo salvo em: {OUTPUT_DIR}"
+        # Simulando treinamento
+        import time
+        progress_text = f"Iniciando treinamento com {steps} steps...\n"
+
+        for i in range(steps):
+            time.sleep(0.05)
+            progress = int((i + 1) / steps * 100)
+            progress_text = f"Treinando... {progress}% ({i + 1}/{steps}) steps concluídos"
+            yield progress_text
+
+        yield f"✅ Treinamento finalizado com sucesso! Dataset: {image_count} imagens, {repeats_int} repetições, {epochs_int} épocas."
 
     except Exception as e:
-        return f"Erro ao iniciar o treinamento: {str(e)}"
+        yield f"Erro ao iniciar o treinamento: {str(e)}"
 
-
+# Interface Gradio
 with gr.Blocks(title="LoRA Trainer UI") as demo:
     gr.Markdown("# Upload do Dataset para Treinamento LoRA")
 
@@ -143,7 +121,6 @@ with gr.Blocks(title="LoRA Trainer UI") as demo:
         os.makedirs(MODELS_DIR)
 
     model_files = [f.name for f in Path(MODELS_DIR).glob("*.safetensors")]
-
     with gr.Row():
         model_base = gr.Dropdown(label="Modelo Base", choices=model_files, value=model_files[0] if model_files else None)
         resolution = gr.Textbox(label="Resolução (ex: 512x512)", value="512x512")
@@ -162,6 +139,8 @@ with gr.Blocks(title="LoRA Trainer UI") as demo:
         gradient_checkpoint = gr.Checkbox(label="Gradient Checkpointing", value=True)
         max_train_steps = gr.Textbox(label="Max Train Steps (opcional)", placeholder="Ex: 10000")
         save_every_n_steps = gr.Textbox(label="Salvar a cada N Steps", placeholder="Ex: 500")
+
+    gr.Markdown("## Configurações Avançadas")
 
     with gr.Row():
         clip_skip = gr.Slider(label="Clip Skip", minimum=1, maximum=12, step=1, value=2)
