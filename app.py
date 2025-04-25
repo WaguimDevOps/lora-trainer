@@ -65,6 +65,8 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 {"params": text_encoder.parameters(), "lr": float(lr_text)}
             ],
             lr=float(learning_rate)
+
+        )
         
         # Agendador de learning rate
         lr_scheduler = get_scheduler(
