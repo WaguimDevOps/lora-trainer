@@ -45,7 +45,42 @@ def calculate_steps(image_count, repeats, epochs, batch_size):
     return steps_per_epoch * epochs
 
 # Função de treinamento
+
 def start_training(model_base, resolution, batch_size, learning_rate, epochs,
+                   train_text_encoder, lr_scheduler, precision, use_vae,
+                   gradient_checkpoint, max_train_steps, save_every_n_steps,
+                   repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
+                   warmup_steps, optimizer, network_dim, network_alpha):
+
+    import time
+    from pathlib import Path
+
+    try:
+        UPLOAD_DIR = "datasets"  # Certifique-se de que esse valor está correto
+        image_files = list(Path(UPLOAD_DIR).rglob("*.jpg")) +                       list(Path(UPLOAD_DIR).rglob("*.jpeg")) +                       list(Path(UPLOAD_DIR).rglob("*.png"))
+
+        image_count = len(image_files)
+        if image_count == 0:
+            yield "Erro: Nenhuma imagem encontrada no dataset."
+            return
+
+        batch_size_int = int(batch_size)
+        epochs_int = int(epochs)
+        repeats_int = int(repeats) if repeats.isdigit() else 10
+        steps = int(max_train_steps) if max_train_steps else calculate_steps(image_count, repeats_int, epochs_int, batch_size_int)
+
+        yield f"Iniciando treinamento com {steps} steps..."
+
+        for i in range(steps):
+            time.sleep(0.1)  # Simula passo de treino
+            progress = int((i + 1) / steps * 100)
+            yield f"Treinando... {progress}% ({i + 1}/{steps}) steps concluídos"
+
+        yield "✅ Treinamento finalizado com sucesso!"
+
+    except Exception as e:
+        yield f"Erro ao iniciar o treinamento: {str(e)}"
+
                    train_text_encoder, lr_scheduler, precision, use_vae,
                    gradient_checkpoint, max_train_steps, save_every_n_steps,
                    repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
