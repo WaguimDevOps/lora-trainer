@@ -160,4 +160,4 @@ with gr.Blocks(title="LoRA Trainer UI") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(share=True)
+    demo.launch(share=True, queue=True)
