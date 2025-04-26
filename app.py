@@ -218,6 +218,9 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         # Carregar o modelo base
         pipe = carregar_modelo_local(model_base)
         
+        # Verificar se o modelo é SDXL 
+        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
+        
         # Extrair componentes do pipeline
         vae = pipe.vae
         unet = pipe.unet
@@ -231,10 +234,15 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         text_encoder.to("cuda", dtype=weight_dtype)
         
         # Configurar LoRA para UNet
+        target_modules = ["to_q", "to_k", "to_v", "to_out.0"] 
+        if is_sdxl:
+            # SDXL tem uma estrutura ligeiramente diferente
+            target_modules = ["to_k", "to_q", "to_v", "to_out.0", "add_k_proj", "add_q_proj", "add_v_proj", "add_out_proj"]
+            
         unet_lora_config = LoraConfig(
             r=network_dim_int,
             lora_alpha=network_alpha_int,
-            target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+            target_modules=target_modules,
             lora_dropout=0.0,
             bias="none",
         )
@@ -242,10 +250,11 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         # Configurar LoRA para Text Encoder se necessário
         if train_text_encoder:
+            text_encoder_target_modules = ["q_proj", "k_proj", "v_proj", "out_proj"]
             text_encoder_lora_config = LoraConfig(
                 r=network_dim_int,
                 lora_alpha=network_alpha_int,
-                target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+                target_modules=text_encoder_target_modules,
                 lora_dropout=0.0,
                 bias="none",
             )
@@ -336,9 +345,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         vae.eval()  # VAE sempre em modo de avaliação
         
-        # Verificar se o modelo é SDXL
-        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
-        
         for epoch in range(epochs_int):
             for batch in train_dataloader:
                 global_step += 1
@@ -380,10 +386,9 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 # Adicionar ruído às latents
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Para SDXL, criar condicionamentos adequados
+                # Para modelos SDXL
                 if is_sdxl:
                     # Preparar embeddings adicionais para SDXL
-                    # Criar time_embeddings (exemplo, pode precisar ajuste para seu modelo específico)
                     original_size = (size, size)
                     target_size = (size, size)
                     
@@ -394,7 +399,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         dtype=weight_dtype
                     )
                     
-                    # Preparar time_ids para SDXL (ajustar conforme necessário)
+                    # Preparar time_ids para SDXL
                     add_time_ids = torch.zeros(
                         (batch_size, 6),  # SDXL usa 6 valores para time_ids
                         device=latents.device,
@@ -423,12 +428,25 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         }
                     ).sample
                 else:
-                    # Para modelos não-SDXL
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings
-                    ).sample
+                    # Para modelos não-SDXL (SD1.5, SD2.x)
+                    # Verificamos se o modelo aceita condicionamento adicional
+                    has_add_cond = hasattr(unet_lora, "config") and hasattr(unet_lora.config, "addition_embed_type")
+                    
+                    if has_add_cond:
+                        # Modelo aceita condicionamento adicional
+                        noise_pred = unet_lora(
+                            noisy_latents,
+                            timesteps,
+                            encoder_hidden_states=text_embeddings,
+                            added_cond_kwargs={}  # Passar dicionário vazio em vez de None
+                        ).sample
+                    else:
+                        # Modelo padrão sem condicionamento adicional
+                        noise_pred = unet_lora(
+                            noisy_latents,
+                            timesteps,
+                            encoder_hidden_states=text_embeddings
+                        ).sample
                 
                 # Calcular loss
                 loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
