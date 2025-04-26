@@ -336,6 +336,9 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         vae.eval()  # VAE sempre em modo de avaliação
         
+        # Verificar se o modelo é SDXL
+        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
+        
         for epoch in range(epochs_int):
             for batch in train_dataloader:
                 global_step += 1
@@ -364,14 +367,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             attention_mask=attention_mask
                         )[0]
 
-
-                # SDXL: manter text_embeddings com dimensão [batch, seq_len, hidden_size]
-                target_dim = 2816
-                missing_dim = target_dim - text_embeddings.shape[-1]
-                batch_size, seq_len, _ = text_embeddings.shape
-                time_ids = torch.zeros((batch_size, seq_len, missing_dim), device=latents.device)
-                text_embeddings = torch.cat([text_embeddings, time_ids], dim=-1)
-                
                 # Ruído para o DDPM e timesteps aleatórios
                 noise = torch.randn_like(latents)
                 batch_size = latents.shape[0]
@@ -385,22 +380,55 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 # Adicionar ruído às latents
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-# Agora descobrir o tamanho esperado
-
-# Descobrir quanto falta
-
-# Criar time_ids
-                
-                # Predição de ruído
-                noise_pred = unet_lora(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=text_embeddings,
-                    added_cond_kwargs={
-                          "text_embeds": text_embeddings,
-                          "time_ids": time_ids
-                           }
-                ).sample
+                # Para SDXL, criar condicionamentos adequados
+                if is_sdxl:
+                    # Preparar embeddings adicionais para SDXL
+                    # Criar time_embeddings (exemplo, pode precisar ajuste para seu modelo específico)
+                    original_size = (size, size)
+                    target_size = (size, size)
+                    
+                    # Criar add_text_embeds com dimensão correta para batch
+                    add_text_embeds = torch.zeros(
+                        (batch_size, 1280),  # Dimensão típica para SDXL
+                        device=latents.device,
+                        dtype=weight_dtype
+                    )
+                    
+                    # Preparar time_ids para SDXL (ajustar conforme necessário)
+                    add_time_ids = torch.zeros(
+                        (batch_size, 6),  # SDXL usa 6 valores para time_ids
+                        device=latents.device,
+                        dtype=weight_dtype
+                    )
+                    
+                    # Preencher com valores corretos
+                    for i in range(batch_size):
+                        add_time_ids[i] = torch.tensor([
+                            original_size[0],
+                            original_size[1],
+                            target_size[0],
+                            target_size[1],
+                            0,  # crop_top_x
+                            0,  # crop_top_y
+                        ], device=latents.device, dtype=weight_dtype)
+                    
+                    # Predição de ruído com condicionamentos adicionais
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs={
+                            "text_embeds": add_text_embeds,
+                            "time_ids": add_time_ids
+                        }
+                    ).sample
+                else:
+                    # Para modelos não-SDXL
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings
+                    ).sample
                 
                 # Calcular loss
                 loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
