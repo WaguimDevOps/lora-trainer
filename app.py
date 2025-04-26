@@ -364,13 +364,13 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             attention_mask=attention_mask
                         )[0]
 
-                
 
-                # Corrigir dimensão concatenando time_ids
+                # SDXL: manter text_embeddings com dimensão [batch, seq_len, hidden_size]
                 target_dim = 2816
-                missing_dim = target_dim - text_embeddings.shape[1]
-                time_ids = torch.zeros((pixel_values.shape[0], missing_dim), device=latents.device)
-                text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
+                missing_dim = target_dim - text_embeddings.shape[-1]
+                batch_size, seq_len, _ = text_embeddings.shape
+                time_ids = torch.zeros((batch_size, seq_len, missing_dim), device=latents.device)
+                text_embeddings = torch.cat([text_embeddings, time_ids], dim=-1)
                 
                 # Ruído para o DDPM e timesteps aleatórios
                 noise = torch.randn_like(latents)
