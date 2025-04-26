@@ -365,6 +365,12 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         )[0]
 
                 text_embeddings = text_embeddings.mean(dim=1)
+
+                # Corrigir dimensão concatenando time_ids
+                target_dim = 2816
+                missing_dim = target_dim - text_embeddings.shape[1]
+                time_ids = torch.zeros((pixel_values.shape[0], missing_dim), device=latents.device)
+                text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
                 
                 # Ruído para o DDPM e timesteps aleatórios
                 noise = torch.randn_like(latents)
@@ -380,16 +386,10 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
 # Agora descobrir o tamanho esperado
-                target_dim = 2816
 
 # Descobrir quanto falta
-                missing_dim = target_dim - text_embeddings.shape[1]
 
 # Criar time_ids
-               time_ids = torch.zeros((batch_size, missing_dim), device=latents.device)
-
-            text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
-                
                 
                 # Predição de ruído
                 noise_pred = unet_lora(
