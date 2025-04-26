@@ -380,7 +380,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # NOVO: Criar time_ids apropriado
-                time_ids = torch.zeros((batch_size, 6), device=latents.device)
+                time_ids = torch.zeros((batch_size, 1792), device=latents.device)
                 
                 # Predição de ruído
                 noise_pred = unet_lora(
