@@ -382,7 +382,10 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=text_embeddings,
-                    added_cond_kwargs={"text_embeds": text_embeddings}
+                    added_cond_kwargs={
+                          "text_embeds": text_embeddings,
+                          "time_ids": timesteps
+                           }
                 ).sample
                 
                 # Calcular loss
