@@ -380,7 +380,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
 # Agora descobrir o tamanho esperado
-target_dim = 2816  
+target_dim = '2816'
 
 # Descobrir quanto falta
 missing_dim = target_dim - text_embeddings.shape[1] 
