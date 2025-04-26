@@ -363,6 +363,8 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             input_ids=input_ids,
                             attention_mask=attention_mask
                         )[0]
+
+                text_embeddings = text_embeddings.mean(dim=1)
                 
                 # Ruído para o DDPM e timesteps aleatórios
                 noise = torch.randn_like(latents)
