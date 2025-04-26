@@ -351,18 +351,20 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 with torch.no_grad():
                     latents = vae.encode(pixel_values).latent_dist.sample() * 0.18215
                 
-                # Obter texto embeddings
-                if train_text_encoder:
-                    text_embeddings = text_encoder_lora(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask
-                    )[0]
-                else:
-                    with torch.no_grad():
-                        text_embeddings = text_encoder(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask
-                        )[0]
+batch_size = latents.shape[0]
+
+# Gerar text_embeddings (como já corrigimos)
+if train_text_encoder:
+    text_embeddings = text_encoder_lora(
+        input_ids=input_ids,
+        attention_mask=attention_mask
+    )[0]
+else:
+    with torch.no_grad():
+        text_embeddings = text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )[0]
 
                 text_embeddings = text_embeddings.mean(dim=1)
                 
