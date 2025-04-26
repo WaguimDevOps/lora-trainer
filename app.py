@@ -381,7 +381,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 noise_pred = unet_lora(
                     noisy_latents,
                     timesteps,
-                    encoder_hidden_states=text_embeddings
+                    encoder_hidden_states=text_embeddings,
                     added_cond_kwargs={}
                 ).sample
                 
