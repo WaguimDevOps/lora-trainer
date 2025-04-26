@@ -364,7 +364,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             attention_mask=attention_mask
                         )[0]
 
-                text_embeddings = text_embeddings.mean(dim=1)
+                
 
                 # Corrigir dimensão concatenando time_ids
                 target_dim = 2816
