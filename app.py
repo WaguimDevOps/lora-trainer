@@ -380,15 +380,15 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
 # Agora descobrir o tamanho esperado
-target_dim = 2816
-missing_dim = target_dim - text_embeddings.shape[1]
+                target_dim = 2816
+
+# Descobrir quanto falta
+                missing_dim = target_dim - text_embeddings.shape[1]
 
 # Criar time_ids
-time_ids = torch.zeros((pixel_values.shape[0], missing_dim), device=latents.device)
+               time_ids = torch.zeros((pixel_values.shape[0], missing_dim), device=latents.device)
 
-# CONCATENAR time_ids ao text_embeddings
-text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
-
+            text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
                 
                 
                 # Predição de ruído
