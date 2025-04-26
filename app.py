@@ -386,9 +386,13 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 # Adicionar ruído às latents
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Para modelos SDXL
+                # Verificamos o tipo de condicionamento do modelo
+                has_add_cond = hasattr(unet.config, "addition_embed_type")
+                addition_embed_type = unet.config.addition_embed_type if has_add_cond else None
+
+                # Preparar condicionamentos adicionais com base no tipo do modelo
                 if is_sdxl:
-                    # Preparar embeddings adicionais para SDXL
+                    # Para modelos SDXL
                     original_size = (size, size)
                     target_size = (size, size)
                     
@@ -427,26 +431,64 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             "time_ids": add_time_ids
                         }
                     ).sample
-                else:
-                    # Para modelos não-SDXL (SD1.5, SD2.x)
-                    # Verificamos se o modelo aceita condicionamento adicional
-                    has_add_cond = hasattr(unet_lora, "config") and hasattr(unet_lora.config, "addition_embed_type")
+                elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_time':
+                    # Para modelos que precisam de text_embeds
+                    # Criar um tensor de embedding de texto adequado
+                    text_embeds_dim = 1024  # Valor padrão para muitos modelos
+                    add_text_embeds = torch.zeros(
+                        (batch_size, text_embeds_dim),
+                        device=latents.device,
+                        dtype=weight_dtype
+                    )
                     
-                    if has_add_cond:
-                        # Modelo aceita condicionamento adicional
-                        noise_pred = unet_lora(
-                            noisy_latents,
-                            timesteps,
-                            encoder_hidden_states=text_embeddings,
-                            added_cond_kwargs={}  # Passar dicionário vazio em vez de None
-                        ).sample
-                    else:
-                        # Modelo padrão sem condicionamento adicional
-                        noise_pred = unet_lora(
-                            noisy_latents,
-                            timesteps,
-                            encoder_hidden_states=text_embeddings
-                        ).sample
+                    # Para modelos que podem precisar de time_ids também
+                    added_cond_kwargs = {"text_embeds": add_text_embeds}
+                    
+                    if addition_embed_type == 'text_image_time':
+                        # Se o modelo precisar de image_embeds também
+                        image_embeds_dim = 1024  # Ajuste conforme necessário
+                        add_image_embeds = torch.zeros(
+                            (batch_size, image_embeds_dim),
+                            device=latents.device,
+                            dtype=weight_dtype
+                        )
+                        added_cond_kwargs["image_embeds"] = add_image_embeds
+                    
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=added_cond_kwargs
+                    ).sample
+                elif has_add_cond:
+                    # Para outros modelos com condicionamento adicional
+                    # Verifique quais parâmetros são necessários no config
+                    added_cond_kwargs = {}
+                    
+                    # Preenchemos com valores vazios conforme necessário
+                    if hasattr(unet.config, "addition_time_embed_dim") and unet.config.addition_time_embed_dim:
+                        # Se o modelo precisa de time_embed
+                        time_embed_dim = unet.config.addition_time_embed_dim
+                        add_time_embed = torch.zeros(
+                            (batch_size, time_embed_dim),
+                            device=latents.device,
+                            dtype=weight_dtype
+                        )
+                        added_cond_kwargs["time_ids"] = add_time_embed
+                    
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=added_cond_kwargs
+                    ).sample
+                else:
+                    # Modelo padrão sem condicionamento adicional
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings
+                    ).sample
                 
                 # Calcular loss
                 loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
