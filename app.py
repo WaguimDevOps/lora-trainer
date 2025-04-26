@@ -386,7 +386,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 missing_dim = target_dim - text_embeddings.shape[1]
 
 # Criar time_ids
-               time_ids = torch.zeros((pixel_values.shape[0], missing_dim), device=latents.device)
+               time_ids = torch.zeros((batch_size, missing_dim), device=latents.device)
 
             text_embeddings = torch.cat([text_embeddings, time_ids], dim=1)
                 
