@@ -1,4 +1,4 @@
-gradio==4.20.0
+gradio==3.5.0
 torch>=2.0.0
 transformers
 accelerate
@@ -6,3 +6,6 @@ safetensors
 scipy
 numpy
 pillow
+diffusers
+peft
+tqdm
