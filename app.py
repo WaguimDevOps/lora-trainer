@@ -421,16 +421,23 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                     # Para modelos não-SDXL, mas que ainda precisam de text_embeds e/ou time_ids
                     # Verificar se o modelo precisa de text_embeds/time_ids
                     if hasattr(unet.config, "addition_embed_type") and unet.config.addition_embed_type == "text_time":
-                        # Criar text_embeds com dimensão apropriada
-                        # A dimensão pode variar dependendo do modelo, mas 768 é comum para SD 1.x/2.x
-                        embed_dim = getattr(unet.config, "addition_time_embed_dim", 768)
+                        # Detectar a dimensão correta para text_embeds
+                        # Verificar se podemos obter a dimensão do modelo
+                        if hasattr(unet, "add_embedding") and hasattr(unet.add_embedding, "linear_1"):
+                            # Obter a dimensão de entrada do primeiro layer linear
+                            embed_dim = unet.add_embedding.linear_1.in_features
+                        else:
+                            # Usar um valor padrão ou tentar inferir de outra forma
+                            embed_dim = 2816  # Valor comum para SD 2.x
+                        
+                        # Criar text_embeds com a dimensão correta
                         add_text_embeds = torch.zeros(
                             (batch_size, embed_dim),
                             device=latents.device,
                             dtype=weight_dtype
                         )
                         
-                        # Criar time_ids para modelos não-SDXL que também precisam desse parâmetro
+                        # Criar time_ids para modelos não-SDXL
                         # Para modelos não-SDXL, geralmente usamos um tensor de zeros com formato (batch_size, 2)
                         add_time_ids = torch.zeros(
                             (batch_size, 2),  # Formato típico para modelos não-SDXL
