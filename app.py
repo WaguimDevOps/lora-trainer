@@ -831,11 +831,10 @@ if __name__ == "__main__":
     demo.launch(share=True)
 
 
-# Adicionar importação para safetensors
+# Importar a biblioteca safetensors no início do arquivo
 from safetensors.torch import save_file
 
-
-# Adicionar esta função para salvar o LoRA como safetensors
+# Adicionar esta função para salvar apenas o arquivo safetensors
 def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, metadata=None):
     """
     Salva os modelos LoRA como um único arquivo safetensors com metadados.
@@ -875,4 +874,38 @@ def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, 
     logger.info(f"LoRA salvo como safetensors em {save_path}")
     
     return save_path
+
+# Na parte onde o modelo é salvo (dentro da função start_training), substitua o código existente por:
+# Criar diretório para o modelo
+model_dir = os.path.join(OUTPUT_DIR, model_name)
+os.makedirs(model_dir, exist_ok=True)
+
+# Definir caminho do arquivo safetensors
+save_path = os.path.join(model_dir, f"{model_name}.safetensors")
+
+# Preparar metadados
+metadata = {
+    "model_type": "lora",
+    "base_model": model_base,
+    "timestamp": timestamp,
+    "resolution": f"{size}x{size}",
+    "train_text_encoder": str(train_text_encoder),
+    "network_dim": str(network_dim_int),
+    "network_alpha": str(network_alpha_int),
+    "learning_rate": str(lr),
+    "lr_scheduler": lr_scheduler,
+    "optimizer": optimizer,
+    "epochs": str(epochs_int),
+    "batch_size": str(batch_size_int)
+}
+
+# Salvar apenas o arquivo safetensors com todos os metadados
+save_lora_as_safetensors(
+    unet_lora=unet_lora,
+    text_encoder_lora=text_encoder_lora if train_text_encoder else None,
+    save_path=save_path,
+    metadata=metadata
+)
+
+progress_text += f"\nModelo LoRA salvo em: {save_path}\n"
      
