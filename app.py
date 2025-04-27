@@ -413,23 +413,25 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         ], device=latents.device, dtype=weight_dtype)
                     
                     # Predição de ruído com condicionamentos adicionais
+                    added_cond_kwargs = {
+                        "text_embeds": add_text_embeds,
+                        "time_ids": add_time_ids
+                    }
                     noise_pred = unet_lora(
                         noisy_latents,
                         timesteps,
                         encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs={
-                            "text_embeds": add_text_embeds,
-                            "time_ids": add_time_ids
-                        }
+                        added_cond_kwargs=added_cond_kwargs
                     ).sample
                 else:
                     # Para modelos não-SDXL
                     noise_pred = unet_lora(
                         noisy_latents,
                         timesteps,
-                        encoder_hidden_states=text_embeddings
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=None
                     ).sample
-                
+
                 # Calcular loss
                 loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
                 
