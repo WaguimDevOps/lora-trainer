@@ -10,6 +10,9 @@ import json
 from tqdm import tqdm
 import numpy as np
 from PIL import Image
+import logging  # Adicione esta importação
+import traceback  # Também útil para logging de erros
+import torch.nn.functional as F  # Necessário para a função de perda
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     StableDiffusionPipeline, 
