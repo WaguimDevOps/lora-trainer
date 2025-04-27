@@ -479,7 +479,6 @@ elif has_add_cond:
     
     # Preenchemos com valores vazios conforme necessário
     if hasattr(unet.config, "addition_time_embed_dim") and unet.config.addition_time_embed_dim:
-        # Se o modelo precisa de time_embed
         time_embed_dim = unet.config.addition_time_embed_dim
         add_time_embed = torch.zeros(
             (batch_size, time_embed_dim),
