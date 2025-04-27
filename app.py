@@ -218,9 +218,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         # Carregar o modelo base
         pipe = carregar_modelo_local(model_base)
         
-        # Verificar se o modelo é SDXL 
-        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
-        
         # Extrair componentes do pipeline
         vae = pipe.vae
         unet = pipe.unet
@@ -234,15 +231,10 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         text_encoder.to("cuda", dtype=weight_dtype)
         
         # Configurar LoRA para UNet
-        target_modules = ["to_q", "to_k", "to_v", "to_out.0"] 
-        if is_sdxl:
-            # SDXL tem uma estrutura ligeiramente diferente
-            target_modules = ["to_k", "to_q", "to_v", "to_out.0", "add_k_proj", "add_q_proj", "add_v_proj", "add_out_proj"]
-            
         unet_lora_config = LoraConfig(
             r=network_dim_int,
             lora_alpha=network_alpha_int,
-            target_modules=target_modules,
+            target_modules=["to_q", "to_k", "to_v", "to_out.0"],
             lora_dropout=0.0,
             bias="none",
         )
@@ -250,11 +242,10 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         # Configurar LoRA para Text Encoder se necessário
         if train_text_encoder:
-            text_encoder_target_modules = ["q_proj", "k_proj", "v_proj", "out_proj"]
             text_encoder_lora_config = LoraConfig(
                 r=network_dim_int,
                 lora_alpha=network_alpha_int,
-                target_modules=text_encoder_target_modules,
+                target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
                 lora_dropout=0.0,
                 bias="none",
             )
@@ -345,6 +336,9 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         vae.eval()  # VAE sempre em modo de avaliação
         
+        # Verificar se o modelo é SDXL
+        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
+        
         for epoch in range(epochs_int):
             for batch in train_dataloader:
                 global_step += 1
@@ -386,13 +380,10 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 # Adicionar ruído às latents
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Verificamos o tipo de condicionamento do modelo
-                has_add_cond = hasattr(unet.config, "addition_embed_type")
-                addition_embed_type = unet.config.addition_embed_type if has_add_cond else None
-
-                # Preparar condicionamentos adicionais com base no tipo do modelo
+                # Para SDXL, criar condicionamentos adequados
                 if is_sdxl:
-                    # Para modelos SDXL
+                    # Preparar embeddings adicionais para SDXL
+                    # Criar time_embeddings (exemplo, pode precisar ajuste para seu modelo específico)
                     original_size = (size, size)
                     target_size = (size, size)
                     
@@ -403,7 +394,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         dtype=weight_dtype
                     )
                     
-                    # Preparar time_ids para SDXL
+                    # Preparar time_ids para SDXL (ajustar conforme necessário)
                     add_time_ids = torch.zeros(
                         (batch_size, 6),  # SDXL usa 6 valores para time_ids
                         device=latents.device,
@@ -431,88 +422,8 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             "time_ids": add_time_ids
                         }
                     ).sample
-                elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_time':
-                    # Para modelos que precisam de text_embeds
-                    # Criar um tensor de embedding de texto adequado
-                    text_embeds_dim = 1024  # Valor padrão para muitos modelos
-                    add_text_embeds = torch.zeros(
-                        (batch_size, text_embeds_dim),
-                        device=latents.device,
-                        dtype=weight_dtype
-                    )
-                    
-                    # Adicionar time_ids para modelos com text_time
-                    time_ids_dim = 64  # Valor típico para time_ids
-                    add_time_ids = torch.zeros(
-                        (batch_size, time_ids_dim),
-                        device=latents.device,
-                        dtype=weight_dtype
-                    )
-                    
-                    # Para modelos que podem precisar de time_ids também
-                    added_cond_kwargs = {
-                        "text_embeds": add_text_embeds,
-                        "time_ids": add_time_ids
-                    }
-                    
-                    if addition_embed_type == 'text_image_time':
-                        # Se o modelo precisar de image_embeds também
-                        image_embeds_dim = 1024  # Ajuste conforme necessário
-                        add_image_embeds = torch.zeros(
-                            (batch_size, image_embeds_dim),
-                            device=latents.device,
-                            dtype=weight_dtype
-                        )
-                        added_cond_kwargs["image_embeds"] = add_image_embeds
-                    
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs=added_cond_kwargs
-                    ).sample  
-                
-elif has_add_cond:
-    # Para outros modelos com condicionamento adicional
-    # Verifique quais parâmetros são necessários no config
-    added_cond_kwargs = {}
-    
-    # Preenchemos com valores vazios conforme necessário
-    if hasattr(unet.config, "addition_time_embed_dim") and unet.config.addition_time_embed_dim:
-        time_embed_dim = unet.config.addition_time_embed_dim
-        add_time_embed = torch.zeros(
-            (batch_size, time_embed_dim),
-            device=latents.device,
-            dtype=weight_dtype
-        )
-        added_cond_kwargs["time_ids"] = add_time_embed
-    
-    # Verificar se o modelo precisa de text_embeds
-    if addition_embed_type and ("text" in addition_embed_type):
-        text_embeds_dim = 1024  # Valor padrão para muitos modelos
-        add_text_embeds = torch.zeros(
-            (batch_size, text_embeds_dim),
-            device=latents.device,
-            dtype=weight_dtype
-        )
-        added_cond_kwargs["text_embeds"] = add_text_embeds
-    
-    noise_pred = unet_lora(
-        noisy_latents,
-        timesteps,
-        encoder_hidden_states=text_embeddings,
-        added_cond_kwargs=added_cond_kwargs
-    ).sample
                 else:
-                    # Modelo padrão sem condicionamento adicional
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs=added_cond_kwargs
-                    ).sample
-                else:
-                    # Modelo padrão sem condicionamento adicional
+                    # Para modelos não-SDXL
                     noise_pred = unet_lora(
                         noisy_latents,
                         timesteps,
