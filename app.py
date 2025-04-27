@@ -480,77 +480,114 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         added_cond_kwargs=added_cond_kwargs
                     ).sample
                 except RuntimeError as e:
-                    # Se o erro for sobre dimensões incompatíveis
-                    if "mat1 and mat2 shapes cannot be multiplied" in str(e):
-                        # Extrair as dimensões do erro, se possível
-                        import re
-                        match = re.search(r'mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)', str(e))
+                    error_msg = str(e)
+                    logger.warning(f"Erro na predição de ruído: {error_msg}")
+                    
+                    # Verificar se é um erro de dimensão incompatível
+                    if "mat1 and mat2 shapes cannot be multiplied" in error_msg:
+                        logger.info("Detectada incompatibilidade de dimensões. Tentando adaptar...")
                         
-                        if match:
-                            # Tentar usar a dimensão correta com base no erro
-                            target_dim = int(match.group(3))
+                        # Extrair as dimensões do erro
+                        import re
+                        dim_patterns = re.findall(r'(\d+)x(\d+)', error_msg)
+                        
+                        if len(dim_patterns) >= 2:
+                            # Obter dimensões do erro
+                            input_dim = int(dim_patterns[0][1])  # Segunda dimensão do primeiro tensor
+                            output_dim = int(dim_patterns[1][0])  # Primeira dimensão do segundo tensor
                             
-                            # Criar text_embeds com a dimensão correta
-                            new_text_embeds = torch.zeros(
-                                (batch_size, target_dim),
-                                device=latents.device,
-                                dtype=weight_dtype
-                            )
+                            logger.info(f"Dimensões detectadas: input={input_dim}, output={output_dim}")
                             
-                            # Atualizar o dicionário
-                            new_cond_kwargs = added_cond_kwargs.copy()
-                            new_cond_kwargs["text_embeds"] = new_text_embeds
+                            # Criar uma camada de adaptação para converter entre as dimensões
+                            adapter = torch.nn.Linear(input_dim, output_dim).to(latents.device, dtype=weight_dtype)
                             
-                            # Tentar novamente com a nova dimensão
+                            # Inicializar com pesos aleatórios pequenos para não perturbar muito o treinamento
+                            torch.nn.init.normal_(adapter.weight, std=0.02)
+                            torch.nn.init.zeros_(adapter.bias)
+                            
+                            # Aplicar a adaptação aos embeddings de texto
+                            adapted_text_embeddings = adapter(text_embeddings)
+                            
+                            logger.info(f"Embeddings adaptados de {text_embeddings.shape} para {adapted_text_embeddings.shape}")
+                            
+                            # Tentar novamente com os embeddings adaptados
                             try:
                                 noise_pred = unet_lora(
                                     noisy_latents,
                                     timesteps,
-                                    encoder_hidden_states=text_embeddings,
-                                    added_cond_kwargs=new_cond_kwargs
+                                    encoder_hidden_states=adapted_text_embeddings,
+                                    added_cond_kwargs=added_cond_kwargs
                                 ).sample
+                                logger.info("Adaptação bem-sucedida!")
                             except Exception as nested_e:
-                                # Se ainda falhar, tentar uma abordagem diferente
-                                logger.error(f"Erro ao tentar com dimensão {target_dim}: {str(nested_e)}")
+                                # Se ainda falhar, tentar uma abordagem mais específica
+                                logger.error(f"Adaptação falhou: {str(nested_e)}")
                                 
-                                # Verificar se o erro menciona dimensões específicas
-                                if "3584" in str(e) and "2816" in str(e):
-                                    # Este é um caso específico para SD 2.x
-                                    logger.info("Detectado possível modelo SD 2.x, ajustando dimensões...")
-                                    
-                                    # Redimensionar os embeddings de texto para a dimensão esperada
-                                    # SD 2.x espera 2816 em vez de 3584
-                                    if text_embeddings.shape[-1] == 3584:
-                                        # Usar uma projeção linear simples para reduzir a dimensão
-                                        projection = torch.nn.Linear(3584, 2816).to(latents.device, dtype=weight_dtype)
-                                        with torch.no_grad():
-                                            text_embeddings_resized = projection(text_embeddings)
-                                        
-                                        # Tentar com os embeddings redimensionados
-                                        noise_pred = unet_lora(
-                                            noisy_latents,
-                                            timesteps,
-                                            encoder_hidden_states=text_embeddings_resized,
-                                            added_cond_kwargs=added_cond_kwargs
-                                        ).sample
-                                    else:
-                                        raise
-                                else:
-                                    raise
+                                # Tentar sem added_cond_kwargs
+                                try:
+                                    logger.info("Tentando sem condicionamentos adicionais...")
+                                    noise_pred = unet_lora(
+                                        noisy_latents,
+                                        timesteps,
+                                        encoder_hidden_states=adapted_text_embeddings
+                                    ).sample
+                                    logger.info("Sucesso sem condicionamentos adicionais!")
+                                except Exception as final_e:
+                                    # Se todas as tentativas falharem, relançar o erro original
+                                    logger.error(f"Todas as tentativas falharam: {str(final_e)}")
+                                    raise RuntimeError(f"Não foi possível adaptar as dimensões: {error_msg}")
                         else:
-                            # Se não conseguir extrair as dimensões, tentar uma última abordagem
+                            # Se não conseguir extrair as dimensões, tentar uma abordagem genérica
                             logger.warning("Não foi possível extrair dimensões do erro. Tentando abordagem alternativa...")
                             
-                            # Tentar sem added_cond_kwargs
+                            # Verificar se o erro menciona dimensões específicas comuns
+                            if "768" in error_msg and "1024" in error_msg:
+                                # Caso específico para SD 1.5 -> SD 2.0
+                                logger.info("Detectada possível incompatibilidade SD 1.5 -> SD 2.0")
+                                adapter = torch.nn.Linear(768, 1024).to(latents.device, dtype=weight_dtype)
+                                adapted_text_embeddings = adapter(text_embeddings)
+                            elif "768" in error_msg and "2048" in error_msg:
+                                # Caso específico para SD 1.5 -> SDXL
+                                logger.info("Detectada possível incompatibilidade SD 1.5 -> SDXL")
+                                adapter = torch.nn.Linear(768, 2048).to(latents.device, dtype=weight_dtype)
+                                adapted_text_embeddings = adapter(text_embeddings)
+                            elif "1024" in error_msg and "2048" in error_msg:
+                                # Caso específico para SD 2.0 -> SDXL
+                                logger.info("Detectada possível incompatibilidade SD 2.0 -> SDXL")
+                                adapter = torch.nn.Linear(1024, 2048).to(latents.device, dtype=weight_dtype)
+                                adapted_text_embeddings = adapter(text_embeddings)
+                            elif "2048" in error_msg and "1024" in error_msg:
+                                # Caso específico para SDXL -> SD 2.0
+                                logger.info("Detectada possível incompatibilidade SDXL -> SD 2.0")
+                                adapter = torch.nn.Linear(2048, 1024).to(latents.device, dtype=weight_dtype)
+                                adapted_text_embeddings = adapter(text_embeddings)
+                            elif "3584" in error_msg and "2816" in error_msg:
+                                # Caso específico para SD 2.x com dimensões específicas
+                                logger.info("Detectada possível incompatibilidade de dimensões SD 2.x")
+                                adapter = torch.nn.Linear(3584, 2816).to(latents.device, dtype=weight_dtype)
+                                adapted_text_embeddings = adapter(text_embeddings)
+                            else:
+                                # Se não conseguir identificar um caso específico, relançar o erro
+                                raise RuntimeError(f"Não foi possível adaptar automaticamente as dimensões: {error_msg}")
+                            
+                            # Tentar com os embeddings adaptados
                             try:
                                 noise_pred = unet_lora(
                                     noisy_latents,
                                     timesteps,
-                                    encoder_hidden_states=text_embeddings
+                                    encoder_hidden_states=adapted_text_embeddings,
+                                    added_cond_kwargs=added_cond_kwargs
                                 ).sample
-                            except Exception as final_e:
-                                logger.error(f"Falha na última tentativa: {str(final_e)}")
-                                raise e
+                            except Exception as alt_e:
+                                # Tentar sem added_cond_kwargs como último recurso
+                                try:
+                                    noise_pred = unet_lora(
+                                        noisy_latents,
+                                        timesteps,
+                                        encoder_hidden_states=adapted_text_embeddings
+                                    ).sample
+                                except Exception as final_e:
+                                    raise RuntimeError(f"Todas as tentativas de adaptação falharam: {str(final_e)}")
                     else:
                         # Se não for um erro de dimensão, repassar o erro original
                         raise
@@ -572,7 +609,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 if global_step % 10 == 0:
                     progress_text += f"Step {global_step}/{total_steps}, Loss: {loss.item():.4f}\n"
                     yield progress_text
-                
+
                 # Salvar checkpoint intermediário se configurado
                 if save_interval > 0 and global_step % save_interval == 0:
                     # Criar diretório para o checkpoint
