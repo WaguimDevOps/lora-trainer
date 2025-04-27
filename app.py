@@ -433,45 +433,45 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                     ).sample
 
                    elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_time':
-    # Para modelos que precisam de text_embeds
-    # Criar um tensor de embedding de texto adequado
-    text_embeds_dim = 1024  # Valor padrão para muitos modelos
-    add_text_embeds = torch.zeros(
-        (batch_size, text_embeds_dim),
-        device=latents.device,
-        dtype=weight_dtype
-    )
-    
-    # Adicionar time_ids para modelos com text_time
-    time_ids_dim = 64  # Valor típico para time_ids
-    add_time_ids = torch.zeros(
-        (batch_size, time_ids_dim),
-        device=latents.device,
-        dtype=weight_dtype
-    )
-    
-    # Para modelos que podem precisar de time_ids também
-    added_cond_kwargs = {
-        "text_embeds": add_text_embeds,
-        "time_ids": add_time_ids
-    }
-    
-    if addition_embed_type == 'text_image_time':
-        # Se o modelo precisar de image_embeds também
-        image_embeds_dim = 1024  # Ajuste conforme necessário
-        add_image_embeds = torch.zeros(
-            (batch_size, image_embeds_dim),
-            device=latents.device,
-            dtype=weight_dtype
-        )
-        added_cond_kwargs["image_embeds"] = add_image_embeds
-    
-    noise_pred = unet_lora(
-        noisy_latents,
-        timesteps,
-        encoder_hidden_states=text_embeddings,
-        added_cond_kwargs=added_cond_kwargs
-    ).sample  
+                    # Para modelos que precisam de text_embeds
+                    # Criar um tensor de embedding de texto adequado
+                    text_embeds_dim = 1024  # Valor padrão para muitos modelos
+                    add_text_embeds = torch.zeros(
+                        (batch_size, text_embeds_dim),
+                        device=latents.device,
+                        dtype=weight_dtype
+                    )
+                    
+                    # Adicionar time_ids para modelos com text_time
+                    time_ids_dim = 64  # Valor típico para time_ids
+                    add_time_ids = torch.zeros(
+                        (batch_size, time_ids_dim),
+                        device=latents.device,
+                        dtype=weight_dtype
+                    )
+                    
+                    # Para modelos que podem precisar de time_ids também
+                    added_cond_kwargs = {
+                        "text_embeds": add_text_embeds,
+                        "time_ids": add_time_ids
+                    }
+                    
+                    if addition_embed_type == 'text_image_time':
+                        # Se o modelo precisar de image_embeds também
+                        image_embeds_dim = 1024  # Ajuste conforme necessário
+                        add_image_embeds = torch.zeros(
+                            (batch_size, image_embeds_dim),
+                            device=latents.device,
+                            dtype=weight_dtype
+                        )
+                        added_cond_kwargs["image_embeds"] = add_image_embeds
+                    
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=added_cond_kwargs
+                    ).sample  
                 
 elif has_add_cond:
     # Para outros modelos com condicionamento adicional
