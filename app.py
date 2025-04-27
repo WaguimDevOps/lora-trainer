@@ -144,6 +144,17 @@ def carregar_modelo_local(model_filename):
     pipe.to("cuda")
     return pipe
 
+# Configurar logging no início do arquivo
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("lora_training.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("lora_trainer")
+
 # Função principal de treinamento real
 def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                    train_text_encoder, lr_scheduler, precision, use_vae,
@@ -336,9 +347,18 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
         
         vae.eval()  # VAE sempre em modo de avaliação
         
-        # Verificar se o modelo é SDXL
-        is_sdxl = hasattr(pipe, "text_encoder_2") or ("xl" in model_base.lower())
+        # Verificar se o modelo é SDXL de forma mais robusta
+        is_sdxl = (
+            hasattr(pipe, "text_encoder_2") or 
+            ("xl" in model_base.lower()) or
+            (hasattr(unet.config, "cross_attention_dim") and unet.config.cross_attention_dim == 2048)
+        )
         
+        # Verificar se o modelo precisa de text_embeds (SD 2.x, SDXL, etc.)
+        needs_text_embeds = (
+            hasattr(unet.config, "addition_embed_type") and 
+            unet.config.addition_embed_type in ["text_time", "text_image_time"]
+        )
         for epoch in range(epochs_int):
             for batch in train_dataloader:
                 global_step += 1
@@ -419,15 +439,11 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                     }
                 else:
                     # Para modelos não-SDXL, mas que ainda precisam de text_embeds e/ou time_ids
-                    # Verificar se o modelo precisa de text_embeds/time_ids
                     if hasattr(unet.config, "addition_embed_type") and unet.config.addition_embed_type == "text_time":
                         # Detectar a dimensão correta para text_embeds
-                        # Verificar se podemos obter a dimensão do modelo
                         if hasattr(unet, "add_embedding") and hasattr(unet.add_embedding, "linear_1"):
-                            # Obter a dimensão de entrada do primeiro layer linear
                             embed_dim = unet.add_embedding.linear_1.in_features
                         else:
-                            # Usar um valor padrão ou tentar inferir de outra forma
                             embed_dim = 2816  # Valor comum para SD 2.x
                         
                         # Criar text_embeds com a dimensão correta
@@ -438,7 +454,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         )
                         
                         # Criar time_ids para modelos não-SDXL
-                        # Para modelos não-SDXL, geralmente usamos um tensor de zeros com formato (batch_size, 2)
                         add_time_ids = torch.zeros(
                             (batch_size, 2),  # Formato típico para modelos não-SDXL
                             device=latents.device,
@@ -453,192 +468,117 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         # Para outros modelos que não precisam de condicionamentos adicionais
                         added_cond_kwargs = {}
                 
-                # Chamada do UNet com added_cond_kwargs sempre como dicionário
-                noise_pred = unet_lora(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=text_embeddings,
-                    added_cond_kwargs=added_cond_kwargs
-                ).sample
-
-                # Calcular loss
-                loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
-                
-                # Otimização
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                lr_scheduler.step()
-                
-                progress = int(global_step / total_steps * 100)
-                progress_text = f"Treinando... {progress}% ({global_step}/{total_steps}) steps concluídos | Loss: {loss.item():.4f}"
-                
-                # Salvar checkpoint intermediário se configurado
-                if save_interval > 0 and global_step % save_interval == 0:
-                    checkpoint_path = os.path.join(OUTPUT_DIR, f"{model_name}_step_{global_step}.safetensors")
-                    
-                    # Salvar estado do adaptador LoRA
-                    unet_lora_state_dict = unet_lora.state_dict()
-                    if train_text_encoder:
-                        text_encoder_lora_state_dict = text_encoder_lora.state_dict()
+                # Predição de ruído
+                try:
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=added_cond_kwargs
+                    ).sample
+                except RuntimeError as e:
+                    # Se o erro for sobre dimensões incompatíveis
+                    if "mat1 and mat2 shapes cannot be multiplied" in str(e):
+                        # Extrair as dimensões do erro, se possível
+                        import re
+                        match = re.search(r'mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)', str(e))
+                        
+                        if match:
+                            # Tentar usar a dimensão correta com base no erro
+                            target_dim = int(match.group(3))
+                            
+                            # Criar text_embeds com a dimensão correta
+                            new_text_embeds = torch.zeros(
+                                (batch_size, target_dim),
+                                device=latents.device,
+                                dtype=weight_dtype
+                            )
+                            
+                            # Atualizar o dicionário
+                            new_cond_kwargs = added_cond_kwargs.copy()
+                            new_cond_kwargs["text_embeds"] = new_text_embeds
+                            
+                            # Tentar novamente com a nova dimensão
+                            noise_pred = unet_lora(
+                                noisy_latents,
+                                timesteps,
+                                encoder_hidden_states=text_embeddings,
+                                added_cond_kwargs=new_cond_kwargs
+                            ).sample
+                        else:
+                            raise
                     else:
-                        text_encoder_lora_state_dict = {}
+                        raise
+                except Exception as e:
+                    # Registrar o erro e tentar uma última abordagem
+                    print(f"Erro ao tentar diferentes dimensões: {str(e)}")
                     
-                    # Salvar a configuração do LoRA
-                    lora_config = {
-                        "peft_type": "LORA",
-                        "task_type": "TEXT_TO_IMAGE",
-                        "r": network_dim_int,
-                        "lora_alpha": network_alpha_int,
-                        "network_alpha": network_alpha_int,
-                        "network_dim": network_dim_int,
-                        "base_model": model_base
-                    }
+                    # Última tentativa: usar apenas os parâmetros básicos sem added_cond_kwargs
+                    try:
+                        noise_pred = unet_lora(
+                            noisy_latents,
+                            timesteps,
+                            encoder_hidden_states=text_embeddings
+                        ).sample
+                except Exception as e:
+                    logger.error(f"Erro durante o treinamento: {str(e)}", exc_info=True)
+                    raise
                     
-                    # Salvar os pesos e a configuração
-                    lora_state = {
-                        "unet_lora": unet_lora_state_dict,
-                        "text_encoder_lora": text_encoder_lora_state_dict,
-                        "config": lora_config
-                    }
-                    
-                    # Converter para safetensors e salvar
-                    from safetensors.torch import save_file
-                    tensors_dict = {}
-                    
-                    # Converter o dicionário de estado aninhado para um dicionário plano
-                    for module_name, module_dict in [("unet", unet_lora_state_dict), ("text_encoder", text_encoder_lora_state_dict)]:
-                        for key, tensor in module_dict.items():
-                            if isinstance(tensor, torch.Tensor):
-                                tensors_dict[f"{module_name}.{key}"] = tensor
-                    
-                    # Salvar usando safetensors
-                    save_file(tensors_dict, checkpoint_path)
-                    
-                    # Salvar metadados em um arquivo JSON separado
-                    with open(os.path.join(OUTPUT_DIR, f"{model_name}_step_{global_step}_config.json"), 'w') as f:
-                        json.dump(lora_config, f, indent=2)
-                    
-                    progress_text += f"\nCheckpoint salvo: {checkpoint_path}"
+                # Log de informações importantes
+                logger.info(f"Iniciando treinamento com modelo base: {model_base}")
+                logger.info(f"Tipo de modelo detectado: {'SDXL' if is_sdxl else 'SD'}")
+                logger.info(f"Necessita text_embeds: {needs_text_embeds}")
                 
-                yield progress_text
-                
-                if global_step >= total_steps:
-                    break
-            
-            if global_step >= total_steps:
-                break
-        
-        # Salvar o modelo final
-        final_model_path = os.path.join(OUTPUT_DIR, f"{model_name}.safetensors")
-        
-        # Salvar estado do adaptador LoRA final
-        unet_lora_state_dict = unet_lora.state_dict()
-        if train_text_encoder:
-            text_encoder_lora_state_dict = text_encoder_lora.state_dict()
-        else:
-            text_encoder_lora_state_dict = {}
-        
-        # Salvar a configuração do LoRA
-        lora_config = {
-            "peft_type": "LORA",
-            "task_type": "TEXT_TO_IMAGE",
-            "r": network_dim_int,
-            "lora_alpha": network_alpha_int,
-            "network_alpha": network_alpha_int,
-            "network_dim": network_dim_int,
-            "base_model": model_base
-        }
-        
-        # Converter para safetensors e salvar o modelo final
-        from safetensors.torch import save_file
-        tensors_dict = {}
-        
-        # Converter o dicionário de estado aninhado para um dicionário plano
-        for module_name, module_dict in [("unet", unet_lora_state_dict), ("text_encoder", text_encoder_lora_state_dict)]:
-            for key, tensor in module_dict.items():
-                if isinstance(tensor, torch.Tensor):
-                    tensors_dict[f"{module_name}.{key}"] = tensor
-        
-        # Salvar usando safetensors
-        save_file(tensors_dict, final_model_path)
-        
-        # Salvar metadados em um arquivo JSON separado
-        with open(os.path.join(OUTPUT_DIR, f"{model_name}_config.json"), 'w') as f:
-            json.dump(lora_config, f, indent=2)
-        
-        yield f"✅ Treinamento finalizado com sucesso! Dataset: {image_count} imagens, {repeats_int} repetições, {epochs_int} épocas.\nModelo LoRA salvo em: {final_model_path}"
-
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        yield f"Erro ao iniciar o treinamento: {str(e)}\n\nDetalhes: {error_details}"
-
-# Interface Gradio - Compatível com Gradio 3.5
-with gr.Blocks(title="LoRA Trainer UI") as demo:
-    gr.Markdown("# Upload do Dataset para Treinamento LoRA")
-
-    with gr.Row():
-        zip_input = gr.File(label=".zip do Dataset", type="file")  # Modificado para Gradio 3.5
-        upload_btn = gr.Button("Enviar e Extrair")
-
-    with gr.Row():
-        images_gallery = gr.Textbox(label="Imagens extraídas", lines=5)
-        txt_gallery = gr.Textbox(label="Legendas extraídas", lines=5)
-
-    upload_btn.click(fn=handle_zip_upload, inputs=zip_input, outputs=[images_gallery, txt_gallery])
-
-    gr.Markdown("# Configurações de Treinamento")
-
-    if not os.path.exists(MODELS_DIR):
-        os.makedirs(MODELS_DIR)
-
-    model_files = [f.name for f in Path(MODELS_DIR).glob("*.safetensors")]
-    with gr.Row():
-        model_base = gr.Dropdown(label="Modelo Base", choices=model_files, value=model_files[0] if model_files else None)
-        resolution = gr.Textbox(label="Resolução (ex: 512x512)", value="512x512")
-        batch_size = gr.Slider(label="Batch Size", minimum=1, maximum=64, step=1, value=4)
-        learning_rate = gr.Textbox(label="Learning Rate", value="1e-4")
-
-    with gr.Row():
-        epochs = gr.Slider(label="Épocas", minimum=1, maximum=100, step=1, value=10)
-        repeats = gr.Textbox(label="Repetições por imagem", value="10")
-        train_text_encoder = gr.Checkbox(label="Treinar Text Encoder", value=True)
-        lr_scheduler = gr.Dropdown(label="Scheduler", choices=["constant", "linear", "cosine", "polynomial"], value="cosine")
-        precision = gr.Dropdown(label="Precisão", choices=["fp16", "bf16", "fp32"], value="fp16")
-
-    with gr.Row():
-        use_vae = gr.Checkbox(label="Usar VAE Customizado", value=False)
-        gradient_checkpoint = gr.Checkbox(label="Gradient Checkpointing", value=True)
-        max_train_steps = gr.Textbox(label="Max Train Steps (opcional)", placeholder="Ex: 10000")
-        save_every_n_steps = gr.Textbox(label="Salvar a cada N Steps", placeholder="Ex: 500")
-
-    gr.Markdown("## Configurações Avançadas")
-
-    with gr.Row():
-        clip_skip = gr.Slider(label="Clip Skip", minimum=1, maximum=12, step=1, value=2)
-        lr_text = gr.Textbox(label="Taxa de aprendizado do Text Encoder", value="0.00001")
-        lr_unet = gr.Textbox(label="Taxa de aprendizado do Unet", value="0.0001")
-        optimizer = gr.Dropdown(label="Otimizador", choices=["AdamW", "Prodigy", "8bit Adam", "DAdaptation"], value="Prodigy")
-
-    with gr.Row():
-        lr_scheduler_cycles = gr.Slider(label="lr_scheduler_num_cycles", minimum=1, maximum=20, step=1, value=1)
-        warmup_steps = gr.Slider(label="num_warmup_steps", minimum=0, maximum=1000, step=10, value=0)
-        network_dim = gr.Slider(label="Rede Dim", minimum=1, maximum=256, step=1, value=64)
-        network_alpha = gr.Slider(label="Rede Alpha", minimum=1, maximum=256, step=1, value=32)
-
-    start_btn = gr.Button("Iniciar Treinamento")
-    status_output = gr.Textbox(label="Status do Treinamento")
-
-    start_btn.click(
-        fn=start_training,
-        inputs=[model_base, resolution, batch_size, learning_rate, epochs,
-                train_text_encoder, lr_scheduler, precision, use_vae,
-                gradient_checkpoint, max_train_steps, save_every_n_steps,
-                repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
-                warmup_steps, optimizer, network_dim, network_alpha],
-        outputs=status_output
-    )
-
-if __name__ == "__main__":
-    demo.queue().launch(share=True)
+                # Predição de ruído
+                try:
+                    noise_pred = unet_lora(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=text_embeddings,
+                        added_cond_kwargs=added_cond_kwargs
+                    ).sample
+                except RuntimeError as e:
+                    # Se o erro for sobre dimensões incompatíveis
+                    if "mat1 and mat2 shapes cannot be multiplied" in str(e):
+                        # Extrair as dimensões do erro, se possível
+                        import re
+                        match = re.search(r'mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)', str(e))
+                        
+                        if match:
+                            # Tentar usar a dimensão correta com base no erro
+                            target_dim = int(match.group(3))
+                            
+                            # Criar text_embeds com a dimensão correta
+                            new_text_embeds = torch.zeros(
+                                (batch_size, target_dim),
+                                device=latents.device,
+                                dtype=weight_dtype
+                            )
+                            
+                            # Atualizar o dicionário
+                            new_cond_kwargs = added_cond_kwargs.copy()
+                            new_cond_kwargs["text_embeds"] = new_text_embeds
+                            
+                            # Tentar novamente com a nova dimensão
+                            noise_pred = unet_lora(
+                                noisy_latents,
+                                timesteps,
+                                encoder_hidden_states=text_embeddings,
+                                added_cond_kwargs=new_cond_kwargs
+                            ).sample
+                        else:
+                            raise
+                    else:
+                        raise
+                except Exception as e:
+                    # Registrar o erro e tentar uma última abordagem
+                    print(f"Erro ao tentar diferentes dimensões: {str(e)}")
+                    
+                    # Última tentativa: usar apenas os parâmetros básicos sem added_cond_kwargs
+                    try:
+                        noise_pred = unet_lora(
+                            noisy_latents,
+                            timesteps,
+                            encoder_hidden_states=text_embeddings
+                        ).sample
+     
