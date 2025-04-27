@@ -21,6 +21,7 @@ from diffusers import (
     AutoencoderKL
 )
 from peft import LoraConfig, get_peft_model
+from safetensors.torch import save_file  # Adicionar esta importação
 
 UPLOAD_DIR = "uploaded_dataset"
 MODELS_DIR = "models"
@@ -163,11 +164,18 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                    train_text_encoder, lr_scheduler, precision, use_vae,
                    gradient_checkpoint, max_train_steps, save_every_n_steps,
                    repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
-                   warmup_steps, optimizer, network_dim, network_alpha):
+                   warmup_steps, optimizer, network_dim, network_alpha, lora_name=""):
     try:
         # Criar timestamp para o nome do modelo
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_name = f"lora_{timestamp}"
+        
+        # Usar o nome personalizado se fornecido, caso contrário usar timestamp
+        if lora_name and lora_name.strip():
+            # Remover caracteres inválidos para nome de arquivo
+            lora_name = ''.join(c for c in lora_name if c.isalnum() or c in '._- ')
+            model_name = lora_name
+        else:
+            model_name = f"lora_{timestamp}"
         
         # Encontrar todas as imagens no dataset
         image_files = []
@@ -686,6 +694,9 @@ def create_ui():
                     images_output = gr.Textbox(label="Imagens Encontradas", interactive=False)
                     captions_output = gr.Textbox(label="Arquivos de Texto Encontrados", interactive=False)
         
+        # Na parte onde a interface Gradio é definida (próximo ao final do arquivo)
+        # Adicionar o campo de nome do LoRA
+        
         with gr.Tab("Treinamento"):
             with gr.Row():
                 with gr.Column():
@@ -745,69 +756,39 @@ def create_ui():
                         value="0"
                     )
             
-            with gr.Accordion("Configurações Avançadas", open=False):
+            with gr.Tab("Treinamento"):
                 with gr.Row():
                     with gr.Column():
-                        repeats = gr.Textbox(
-                            label="Repetições do Dataset",
-                            value="10"
+                        # Adicionar campo para nome do LoRA
+                        lora_name = gr.Textbox(
+                            label="Nome do LoRA (opcional)",
+                            placeholder="Digite um nome para o seu LoRA (ex: meu_lora_v1)"
                         )
-                        clip_skip = gr.Dropdown(
-                            label="CLIP Skip",
-                            choices=["1", "2"],
-                            value="1"
+                        
+                        model_base = gr.Dropdown(
+                            label="Modelo Base",
+                            choices=os.listdir(MODELS_DIR) if os.path.exists(MODELS_DIR) else [],
+                            value=os.listdir(MODELS_DIR)[0] if os.path.exists(MODELS_DIR) and os.listdir(MODELS_DIR) else None
                         )
-                        lr_text = gr.Textbox(
-                            label="Learning Rate (Text Encoder)",
-                            value="1e-5"
-                        )
-                        lr_unet = gr.Textbox(
-                            label="Learning Rate (UNet)",
-                            value="1e-4"
-                        )
-                    with gr.Column():
-                        lr_scheduler_cycles = gr.Textbox(
-                            label="Ciclos do Scheduler",
-                            value="1"
-                        )
-                        warmup_steps = gr.Textbox(
-                            label="Warmup Steps",
-                            value="0"
-                        )
-                        optimizer = gr.Dropdown(
-                            label="Otimizador",
-                            choices=["AdamW", "Lion", "AdamW8bit"],
-                            value="AdamW"
-                        )
-                        network_dim = gr.Dropdown(
-                            label="Dimensão da Rede (Rank)",
-                            choices=["4", "8", "16", "32", "64", "128"],
-                            value="32"
-                        )
-                        network_alpha = gr.Dropdown(
-                            label="Alpha da Rede",
-                            choices=["1", "4", "8", "16", "32", "64"],
-                            value="16"
-                        )
+                        
+                        train_button = gr.Button("Iniciar Treinamento", variant="primary")
+                        output = gr.Textbox(label="Status do Treinamento", interactive=False)
+                
+                # Conectar funções aos elementos da UI
+                upload_button.click(handle_zip_upload, inputs=[zip_file], outputs=[images_output, captions_output])
+                train_button.click(
+                    fn=start_training,
+                    inputs=[
+                        model_base, resolution, batch_size, learning_rate, epochs,
+                        train_text_encoder, lr_scheduler, precision, use_vae,
+                        gradient_checkpoint, max_train_steps, save_every_n_steps,
+                        repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
+                        warmup_steps, optimizer, network_dim, network_alpha, lora_name  # Adicionar lora_name aqui
+                    ],
+                    outputs=[output]
+                )
             
-            train_button = gr.Button("Iniciar Treinamento", variant="primary")
-            output = gr.Textbox(label="Status do Treinamento", interactive=False)
-        
-        # Conectar funções aos elementos da UI
-        upload_button.click(handle_zip_upload, inputs=[zip_file], outputs=[images_output, captions_output])
-        train_button.click(
-            start_training,
-            inputs=[
-                model_base, resolution, batch_size, learning_rate, epochs,
-                train_text_encoder, lr_scheduler, precision, use_vae,
-                gradient_checkpoint, max_train_steps, save_every_n_steps,
-                repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
-                warmup_steps, optimizer, network_dim, network_alpha
-            ],
-            outputs=[output]
-        )
-    
-    return demo
+            return demo
 
 # Iniciar a aplicação
 if __name__ == "__main__":
@@ -834,7 +815,7 @@ if __name__ == "__main__":
 # Importar a biblioteca safetensors no início do arquivo
 from safetensors.torch import save_file
 
-# Adicionar esta função para salvar apenas o arquivo safetensors
+# Adicionar esta função após a função carregar_modelo_local
 def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, metadata=None):
     """
     Salva os modelos LoRA como um único arquivo safetensors com metadados.
@@ -865,9 +846,17 @@ def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, 
     if metadata is None:
         metadata = {}
     
+    # Converter todos os valores para string (requisito do safetensors)
+    for k, v in metadata.items():
+        if not isinstance(v, str):
+            metadata[k] = str(v)
+    
     # Adicionar metadados básicos
     if "format" not in metadata:
         metadata["format"] = "pt"
+    
+    # Garantir que o diretório de destino exista
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     # Salvar como safetensors
     save_file(state_dict, save_path, metadata)
@@ -875,7 +864,9 @@ def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, 
     
     return save_path
 
-# Na parte onde o modelo é salvo (dentro da função start_training), substitua o código existente por:
+# Dentro da função start_training, onde o modelo é salvo (próximo ao final da função)
+# Substituir o código de salvamento existente por:
+
 # Criar diretório para o modelo
 model_dir = os.path.join(OUTPUT_DIR, model_name)
 os.makedirs(model_dir, exist_ok=True)
