@@ -428,14 +428,6 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                     encoder_hidden_states=text_embeddings,
                     added_cond_kwargs=added_cond_kwargs
                 ).sample
-                else:
-                    # Para modelos não-SDXL
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs=None
-                    ).sample
 
                 # Calcular loss
                 loss = torch.nn.functional.mse_loss(noise_pred, noise, reduction="mean")
