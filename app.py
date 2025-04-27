@@ -581,4 +581,241 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             timesteps,
                             encoder_hidden_states=text_embeddings
                         ).sample
+                
+                # Calcular a perda
+                loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+                
+                # Backpropagation
+                loss.backward()
+                
+                # Atualizar pesos
+                optimizer.step()
+                optimizer.zero_grad()
+                
+                # Atualizar learning rate
+                lr_scheduler.step()
+                
+                # Atualizar progresso
+                if global_step % 10 == 0:
+                    progress_text += f"Step {global_step}/{total_steps}, Loss: {loss.item():.4f}\n"
+                    yield progress_text
+                
+                # Salvar checkpoint intermediário se configurado
+                if save_interval > 0 and global_step % save_interval == 0:
+                    save_path = os.path.join(OUTPUT_DIR, f"{model_name}_step{global_step}")
+                    os.makedirs(save_path, exist_ok=True)
+                    
+                    # Salvar estado do modelo LoRA
+                    unet_lora.save_pretrained(os.path.join(save_path, "unet_lora"))
+                    if train_text_encoder:
+                        text_encoder_lora.save_pretrained(os.path.join(save_path, "text_encoder_lora"))
+                    
+                    # Salvar configuração
+                    config = {
+                        "model_base": model_base,
+                        "resolution": resolution,
+                        "train_text_encoder": train_text_encoder,
+                        "network_dim": network_dim,
+                        "network_alpha": network_alpha,
+                        "step": global_step,
+                        "total_steps": total_steps,
+                        "timestamp": timestamp
+                    }
+                    
+                    with open(os.path.join(save_path, "config.json"), "w") as f:
+                        json.dump(config, f, indent=4)
+                    
+                    progress_text += f"Checkpoint salvo em {save_path}\n"
+                    yield progress_text
+        
+        # Salvar modelo final
+        final_path = os.path.join(OUTPUT_DIR, model_name)
+        os.makedirs(final_path, exist_ok=True)
+        
+        # Salvar estado do modelo LoRA
+        unet_lora.save_pretrained(os.path.join(final_path, "unet_lora"))
+        if train_text_encoder:
+            text_encoder_lora.save_pretrained(os.path.join(final_path, "text_encoder_lora"))
+        
+        # Salvar configuração
+        config = {
+            "model_base": model_base,
+            "resolution": resolution,
+            "train_text_encoder": train_text_encoder,
+            "network_dim": network_dim,
+            "network_alpha": network_alpha,
+            "step": global_step,
+            "total_steps": total_steps,
+            "timestamp": timestamp
+        }
+        
+        with open(os.path.join(final_path, "config.json"), "w") as f:
+            json.dump(config, f, indent=4)
+        
+        progress_text += f"\nTreinamento concluído! Modelo salvo em {final_path}"
+        return progress_text
+    
+    except Exception as e:
+        error_message = f"Erro ao iniciar o treinamento: {str(e)}\n\nDetalhes: {traceback.format_exc()}"
+        print(error_message)
+        return error_message
+
+# Interface Gradio
+def create_ui():
+    with gr.Blocks(title="LoRA Trainer") as demo:
+        gr.Markdown("# 🚀 LoRA Trainer")
+        gr.Markdown("Treine modelos LoRA para Stable Diffusion com facilidade!")
+        
+        with gr.Tab("Dataset"):
+            with gr.Row():
+                with gr.Column():
+                    zip_file = gr.File(label="Upload do Dataset (ZIP)", file_types=[".zip"])
+                    upload_button = gr.Button("Processar Dataset")
+                with gr.Column():
+                    images_output = gr.Textbox(label="Imagens Encontradas", interactive=False)
+                    captions_output = gr.Textbox(label="Arquivos de Texto Encontrados", interactive=False)
+        
+        with gr.Tab("Treinamento"):
+            with gr.Row():
+                with gr.Column():
+                    model_base = gr.Dropdown(
+                        label="Modelo Base",
+                        choices=sorted([f for f in os.listdir(MODELS_DIR) if f.endswith(('.safetensors', '.ckpt'))]),
+                        value=None
+                    )
+                    resolution = gr.Dropdown(
+                        label="Resolução",
+                        choices=["512x512", "768x768", "1024x1024"],
+                        value="512x512"
+                    )
+                    batch_size = gr.Dropdown(
+                        label="Batch Size",
+                        choices=["1", "2", "4", "8"],
+                        value="1"
+                    )
+                    learning_rate = gr.Textbox(
+                        label="Learning Rate",
+                        value="1e-4"
+                    )
+                    epochs = gr.Textbox(
+                        label="Épocas",
+                        value="5"
+                    )
+                    train_text_encoder = gr.Checkbox(
+                        label="Treinar Text Encoder",
+                        value=True
+                    )
+                    
+                with gr.Column():
+                    lr_scheduler = gr.Dropdown(
+                        label="LR Scheduler",
+                        choices=["constant", "linear", "cosine", "polynomial"],
+                        value="constant"
+                    )
+                    precision = gr.Dropdown(
+                        label="Precisão",
+                        choices=["fp16", "bf16", "fp32"],
+                        value="fp16"
+                    )
+                    use_vae = gr.Checkbox(
+                        label="Usar VAE",
+                        value=False
+                    )
+                    gradient_checkpoint = gr.Checkbox(
+                        label="Gradient Checkpointing",
+                        value=False
+                    )
+                    max_train_steps = gr.Textbox(
+                        label="Passos Máximos (vazio = auto)",
+                        value=""
+                    )
+                    save_every_n_steps = gr.Textbox(
+                        label="Salvar a cada N passos (0 = apenas no final)",
+                        value="0"
+                    )
+            
+            with gr.Accordion("Configurações Avançadas", open=False):
+                with gr.Row():
+                    with gr.Column():
+                        repeats = gr.Textbox(
+                            label="Repetições do Dataset",
+                            value="10"
+                        )
+                        clip_skip = gr.Dropdown(
+                            label="CLIP Skip",
+                            choices=["1", "2"],
+                            value="1"
+                        )
+                        lr_text = gr.Textbox(
+                            label="Learning Rate (Text Encoder)",
+                            value="1e-5"
+                        )
+                        lr_unet = gr.Textbox(
+                            label="Learning Rate (UNet)",
+                            value="1e-4"
+                        )
+                    with gr.Column():
+                        lr_scheduler_cycles = gr.Textbox(
+                            label="Ciclos do Scheduler",
+                            value="1"
+                        )
+                        warmup_steps = gr.Textbox(
+                            label="Warmup Steps",
+                            value="0"
+                        )
+                        optimizer = gr.Dropdown(
+                            label="Otimizador",
+                            choices=["AdamW", "Lion", "AdamW8bit"],
+                            value="AdamW"
+                        )
+                        network_dim = gr.Dropdown(
+                            label="Dimensão da Rede (Rank)",
+                            choices=["4", "8", "16", "32", "64", "128"],
+                            value="32"
+                        )
+                        network_alpha = gr.Dropdown(
+                            label="Alpha da Rede",
+                            choices=["1", "4", "8", "16", "32", "64"],
+                            value="16"
+                        )
+            
+            train_button = gr.Button("Iniciar Treinamento", variant="primary")
+            output = gr.Textbox(label="Status do Treinamento", interactive=False)
+        
+        # Conectar funções aos elementos da UI
+        upload_button.click(handle_zip_upload, inputs=[zip_file], outputs=[images_output, captions_output])
+        train_button.click(
+            start_training,
+            inputs=[
+                model_base, resolution, batch_size, learning_rate, epochs,
+                train_text_encoder, lr_scheduler, precision, use_vae,
+                gradient_checkpoint, max_train_steps, save_every_n_steps,
+                repeats, clip_skip, lr_text, lr_unet, lr_scheduler_cycles,
+                warmup_steps, optimizer, network_dim, network_alpha
+            ],
+            outputs=[output]
+        )
+    
+    return demo
+
+# Iniciar a aplicação
+if __name__ == "__main__":
+    import torch.nn.functional as F
+    import traceback
+    import logging
+    
+    # Configurar logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("lora_training.log"),
+            logging.StreamHandler()
+        ]
+    )
+    logger = logging.getLogger("lora_trainer")
+    
+    demo = create_ui()
+    demo.queue()
+    demo.launch(share=True)
      
