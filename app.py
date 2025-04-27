@@ -419,4 +419,4 @@ def build_ui():
     return demo
 
 if __name__ == "__main__":
-    build_ui().queue().launch(share=True)
+   demo.queue().launch(share=True)
