@@ -417,12 +417,17 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         "text_embeds": add_text_embeds,
                         "time_ids": add_time_ids
                     }
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs=added_cond_kwargs
-                    ).sample
+                else:
+                    # Para modelos não-SDXL, criar um dicionário vazio em vez de None
+                    added_cond_kwargs = {}
+                
+                # Chamada do UNet com added_cond_kwargs sempre como dicionário
+                noise_pred = unet_lora(
+                    noisy_latents,
+                    timesteps,
+                    encoder_hidden_states=text_embeddings,
+                    added_cond_kwargs=added_cond_kwargs
+                ).sample
                 else:
                     # Para modelos não-SDXL
                     noise_pred = unet_lora(
