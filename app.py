@@ -432,8 +432,7 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         }
                     ).sample
 
-                
-elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_time':
+                   elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_time':
     # Para modelos que precisam de text_embeds
     # Criar um tensor de embedding de texto adequado
     text_embeds_dim = 1024  # Valor padrão para muitos modelos
@@ -472,8 +471,7 @@ elif addition_embed_type == 'text_time' or addition_embed_type == 'text_image_ti
         timesteps,
         encoder_hidden_states=text_embeddings,
         added_cond_kwargs=added_cond_kwargs
-    ).sample
-
+    ).sample  
                 
 elif has_add_cond:
     # Para outros modelos com condicionamento adicional
