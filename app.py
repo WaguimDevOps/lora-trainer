@@ -520,67 +520,9 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             timesteps,
                             encoder_hidden_states=text_embeddings
                         ).sample
-                except Exception as e:
-                    logger.error(f"Erro durante o treinamento: {str(e)}", exc_info=True)
-                    raise
-                    
-                # Log de informações importantes
-                logger.info(f"Iniciando treinamento com modelo base: {model_base}")
-                logger.info(f"Tipo de modelo detectado: {'SDXL' if is_sdxl else 'SD'}")
-                logger.info(f"Necessita text_embeds: {needs_text_embeds}")
-                
-                # Predição de ruído
-                try:
-                    noise_pred = unet_lora(
-                        noisy_latents,
-                        timesteps,
-                        encoder_hidden_states=text_embeddings,
-                        added_cond_kwargs=added_cond_kwargs
-                    ).sample
-                except RuntimeError as e:
-                    # Se o erro for sobre dimensões incompatíveis
-                    if "mat1 and mat2 shapes cannot be multiplied" in str(e):
-                        # Extrair as dimensões do erro, se possível
-                        import re
-                        match = re.search(r'mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)', str(e))
-                        
-                        if match:
-                            # Tentar usar a dimensão correta com base no erro
-                            target_dim = int(match.group(3))
-                            
-                            # Criar text_embeds com a dimensão correta
-                            new_text_embeds = torch.zeros(
-                                (batch_size, target_dim),
-                                device=latents.device,
-                                dtype=weight_dtype
-                            )
-                            
-                            # Atualizar o dicionário
-                            new_cond_kwargs = added_cond_kwargs.copy()
-                            new_cond_kwargs["text_embeds"] = new_text_embeds
-                            
-                            # Tentar novamente com a nova dimensão
-                            noise_pred = unet_lora(
-                                noisy_latents,
-                                timesteps,
-                                encoder_hidden_states=text_embeddings,
-                                added_cond_kwargs=new_cond_kwargs
-                            ).sample
-                        else:
-                            raise
-                    else:
-                        raise
-                except Exception as e:
-                    # Registrar o erro e tentar uma última abordagem
-                    print(f"Erro ao tentar diferentes dimensões: {str(e)}")
-                    
-                    # Última tentativa: usar apenas os parâmetros básicos sem added_cond_kwargs
-                    try:
-                        noise_pred = unet_lora(
-                            noisy_latents,
-                            timesteps,
-                            encoder_hidden_states=text_embeddings
-                        ).sample
+                    except Exception as final_e:
+                        # Se falhar, levantar o erro original
+                        raise e
                 
                 # Calcular a perda
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
