@@ -829,4 +829,50 @@ if __name__ == "__main__":
     demo = create_ui()
     demo.queue()
     demo.launch(share=True)
+
+
+# Adicionar importação para safetensors
+from safetensors.torch import save_file
+
+
+# Adicionar esta função para salvar o LoRA como safetensors
+def save_lora_as_safetensors(unet_lora, text_encoder_lora=None, save_path=None, metadata=None):
+    """
+    Salva os modelos LoRA como um único arquivo safetensors com metadados.
+    
+    Args:
+        unet_lora: Modelo LoRA do UNet
+        text_encoder_lora: Modelo LoRA do Text Encoder (opcional)
+        save_path: Caminho para salvar o arquivo safetensors
+        metadata: Dicionário com metadados para incluir no arquivo
+    """
+    # Preparar dicionário para salvar os pesos
+    state_dict = {}
+    
+    # Adicionar pesos do UNet LoRA
+    unet_state_dict = unet_lora.state_dict()
+    for key, value in unet_state_dict.items():
+        if "lora" in key:  # Apenas salvar os pesos LoRA
+            state_dict[f"unet.{key}"] = value.to("cpu")
+    
+    # Adicionar pesos do Text Encoder LoRA, se disponível
+    if text_encoder_lora is not None:
+        text_encoder_state_dict = text_encoder_lora.state_dict()
+        for key, value in text_encoder_state_dict.items():
+            if "lora" in key:  # Apenas salvar os pesos LoRA
+                state_dict[f"text_encoder.{key}"] = value.to("cpu")
+    
+    # Preparar metadados padrão se não fornecidos
+    if metadata is None:
+        metadata = {}
+    
+    # Adicionar metadados básicos
+    if "format" not in metadata:
+        metadata["format"] = "pt"
+    
+    # Salvar como safetensors
+    save_file(state_dict, save_path, metadata)
+    logger.info(f"LoRA salvo como safetensors em {save_path}")
+    
+    return save_path
      
