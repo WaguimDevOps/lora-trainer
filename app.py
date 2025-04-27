@@ -502,30 +502,58 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                             new_cond_kwargs["text_embeds"] = new_text_embeds
                             
                             # Tentar novamente com a nova dimensão
-                            noise_pred = unet_lora(
-                                noisy_latents,
-                                timesteps,
-                                encoder_hidden_states=text_embeddings,
-                                added_cond_kwargs=new_cond_kwargs
-                            ).sample
+                            try:
+                                noise_pred = unet_lora(
+                                    noisy_latents,
+                                    timesteps,
+                                    encoder_hidden_states=text_embeddings,
+                                    added_cond_kwargs=new_cond_kwargs
+                                ).sample
+                            except Exception as nested_e:
+                                # Se ainda falhar, tentar uma abordagem diferente
+                                logger.error(f"Erro ao tentar com dimensão {target_dim}: {str(nested_e)}")
+                                
+                                # Verificar se o erro menciona dimensões específicas
+                                if "3584" in str(e) and "2816" in str(e):
+                                    # Este é um caso específico para SD 2.x
+                                    logger.info("Detectado possível modelo SD 2.x, ajustando dimensões...")
+                                    
+                                    # Redimensionar os embeddings de texto para a dimensão esperada
+                                    # SD 2.x espera 2816 em vez de 3584
+                                    if text_embeddings.shape[-1] == 3584:
+                                        # Usar uma projeção linear simples para reduzir a dimensão
+                                        projection = torch.nn.Linear(3584, 2816).to(latents.device, dtype=weight_dtype)
+                                        with torch.no_grad():
+                                            text_embeddings_resized = projection(text_embeddings)
+                                        
+                                        # Tentar com os embeddings redimensionados
+                                        noise_pred = unet_lora(
+                                            noisy_latents,
+                                            timesteps,
+                                            encoder_hidden_states=text_embeddings_resized,
+                                            added_cond_kwargs=added_cond_kwargs
+                                        ).sample
+                                    else:
+                                        raise
+                                else:
+                                    raise
                         else:
-                            raise
+                            # Se não conseguir extrair as dimensões, tentar uma última abordagem
+                            logger.warning("Não foi possível extrair dimensões do erro. Tentando abordagem alternativa...")
+                            
+                            # Tentar sem added_cond_kwargs
+                            try:
+                                noise_pred = unet_lora(
+                                    noisy_latents,
+                                    timesteps,
+                                    encoder_hidden_states=text_embeddings
+                                ).sample
+                            except Exception as final_e:
+                                logger.error(f"Falha na última tentativa: {str(final_e)}")
+                                raise e
                     else:
+                        # Se não for um erro de dimensão, repassar o erro original
                         raise
-                except Exception as e:
-                    # Registrar o erro e tentar uma última abordagem
-                    print(f"Erro ao tentar diferentes dimensões: {str(e)}")
-                    
-                    # Última tentativa: usar apenas os parâmetros básicos sem added_cond_kwargs
-                    try:
-                        noise_pred = unet_lora(
-                            noisy_latents,
-                            timesteps,
-                            encoder_hidden_states=text_embeddings
-                        ).sample
-                    except Exception as final_e:
-                        # Se falhar, levantar o erro original
-                        raise e
                 
                 # Calcular a perda
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
@@ -547,63 +575,64 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                 
                 # Salvar checkpoint intermediário se configurado
                 if save_interval > 0 and global_step % save_interval == 0:
-                    save_path = os.path.join(OUTPUT_DIR, f"{model_name}_step{global_step}")
-                    os.makedirs(save_path, exist_ok=True)
+                    # Criar diretório para o checkpoint
+                    checkpoint_dir = os.path.join(OUTPUT_DIR, f"{model_name}_step{global_step}")
+                    os.makedirs(checkpoint_dir, exist_ok=True)
                     
                     # Salvar estado do modelo LoRA
-                    unet_lora.save_pretrained(os.path.join(save_path, "unet_lora"))
+                    unet_lora.save_pretrained(os.path.join(checkpoint_dir, "unet_lora"))
                     if train_text_encoder:
-                        text_encoder_lora.save_pretrained(os.path.join(save_path, "text_encoder_lora"))
+                        text_encoder_lora.save_pretrained(os.path.join(checkpoint_dir, "text_encoder_lora"))
                     
                     # Salvar configuração
                     config = {
                         "model_base": model_base,
-                        "resolution": resolution,
+                        "resolution": f"{size}x{size}",
                         "train_text_encoder": train_text_encoder,
-                        "network_dim": network_dim,
-                        "network_alpha": network_alpha,
+                        "network_dim": network_dim_int,
+                        "network_alpha": network_alpha_int,
                         "step": global_step,
-                        "total_steps": total_steps,
-                        "timestamp": timestamp
+                        "epoch": epoch,
+                        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
                     }
                     
-                    with open(os.path.join(save_path, "config.json"), "w") as f:
+                    with open(os.path.join(checkpoint_dir, "config.json"), "w") as f:
                         json.dump(config, f, indent=4)
                     
-                    progress_text += f"Checkpoint salvo em {save_path}\n"
+                    progress_text += f"Checkpoint salvo em {checkpoint_dir}\n"
                     yield progress_text
         
-        # Salvar modelo final
-        final_path = os.path.join(OUTPUT_DIR, model_name)
-        os.makedirs(final_path, exist_ok=True)
+        # Salvar o modelo final
+        final_dir = os.path.join(OUTPUT_DIR, model_name)
+        os.makedirs(final_dir, exist_ok=True)
         
         # Salvar estado do modelo LoRA
-        unet_lora.save_pretrained(os.path.join(final_path, "unet_lora"))
+        unet_lora.save_pretrained(os.path.join(final_dir, "unet_lora"))
         if train_text_encoder:
-            text_encoder_lora.save_pretrained(os.path.join(final_path, "text_encoder_lora"))
+            text_encoder_lora.save_pretrained(os.path.join(final_dir, "text_encoder_lora"))
         
         # Salvar configuração
         config = {
             "model_base": model_base,
-            "resolution": resolution,
+            "resolution": f"{size}x{size}",
             "train_text_encoder": train_text_encoder,
-            "network_dim": network_dim,
-            "network_alpha": network_alpha,
-            "step": global_step,
-            "total_steps": total_steps,
-            "timestamp": timestamp
+            "network_dim": network_dim_int,
+            "network_alpha": network_alpha_int,
+            "total_steps": global_step,
+            "epochs": epoch + 1,
+            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
         
-        with open(os.path.join(final_path, "config.json"), "w") as f:
+        with open(os.path.join(final_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=4)
         
-        progress_text += f"\nTreinamento concluído! Modelo salvo em {final_path}"
-        return progress_text
-    
+        progress_text += f"\nTreinamento concluído! Modelo salvo em {final_dir}"
+        yield progress_text
+        
     except Exception as e:
-        error_message = f"Erro ao iniciar o treinamento: {str(e)}\n\nDetalhes: {traceback.format_exc()}"
-        print(error_message)
-        return error_message
+        error_msg = f"Erro ao iniciar o treinamento: {str(e)}\n\nDetalhes: {traceback.format_exc()}"
+        logger.error(error_msg)
+        yield error_msg
 
 # Interface Gradio
 def create_ui():
