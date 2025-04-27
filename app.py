@@ -418,8 +418,21 @@ def start_training(model_base, resolution, batch_size, learning_rate, epochs,
                         "time_ids": add_time_ids
                     }
                 else:
-                    # Para modelos não-SDXL, criar um dicionário vazio em vez de None
-                    added_cond_kwargs = {}
+                    # Para modelos não-SDXL, mas que ainda precisam de text_embeds
+                    # Verificar se o modelo precisa de text_embeds
+                    if hasattr(unet.config, "addition_embed_type") and unet.config.addition_embed_type == "text_time":
+                        # Criar text_embeds com dimensão apropriada
+                        # A dimensão pode variar dependendo do modelo, mas 768 é comum para SD 1.x/2.x
+                        embed_dim = getattr(unet.config, "addition_time_embed_dim", 768)
+                        add_text_embeds = torch.zeros(
+                            (batch_size, embed_dim),
+                            device=latents.device,
+                            dtype=weight_dtype
+                        )
+                        added_cond_kwargs = {"text_embeds": add_text_embeds}
+                    else:
+                        # Para outros modelos que não precisam de condicionamentos adicionais
+                        added_cond_kwargs = {}
                 
                 # Chamada do UNet com added_cond_kwargs sempre como dicionário
                 noise_pred = unet_lora(
